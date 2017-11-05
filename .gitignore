@@ -1,0 +1,4 @@
+.credentials.json
+secrets.py
+db.sqlite
+.env

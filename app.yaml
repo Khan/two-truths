@@ -1,0 +1,12 @@
+runtime: python
+env: flex
+entrypoint: gunicorn -b :$PORT main:app
+
+manual_scaling:
+    instances: 1
+
+env_variables:
+    DEBUG: false
+
+beta_settings:
+    cloud_sql_instances: two-truths:us-central1:two-truths
