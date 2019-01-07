@@ -79,7 +79,7 @@ def call_slack_api(call, data=None):
 
 def send_message(channel, message):
     return call_slack_api(
-        'chat.postMessage', 
+        'chat.postMessage',
         {'channel': channel, 'text': message,
          'username': USERNAME, 'icon_emoji': ICON_EMOJI})
 
@@ -197,9 +197,20 @@ def handle_leaderboard(args, channel):
     votes = (db.session.query(Vote.user_id, db.func.count(Vote.id),
                               Statement.veracity)
              .select_from(Vote).join(Statement)
-             .filter(Statement.veracity.isnot(None))
-             .group_by(Vote.user_id, Statement.veracity)
-             .all())
+             .filter(Statement.veracity.isnot(None)))
+    heading = "Two Truths and a Lie Leaderboard"
+    if args.isdigit():
+        try:
+            year = int(args)
+            start = datetime.datetime(year, 1, 1)
+            end = datetime.datetime(year + 1, 1, 1)
+            votes = (votes.filter(Statement.timestamp >= start)
+                     .filter(Statement.timestamp < end))
+            heading = "%s %s" % (heading, args)
+        except Exception:
+            return "%s doesn't seem like a valid year to me!" % args
+
+    votes = votes.group_by(Vote.user_id, Statement.veracity).all()
 
     users = collections.defaultdict(lambda: {'total': 0})
     for user_id, votes, veracity in votes:
@@ -218,18 +229,18 @@ def handle_leaderboard(args, channel):
     leaderboard = sorted(users.iteritems(),
                          reverse=True, key=lambda (k, v): v['%'])
 
-    message = "Two Truths and a Lie Leaderboard:\n%s" % '\n'.join(
+    message = "%s:\n%s" % (heading, '\n'.join(
         '%s. %s with %.0f%% (%s/%s)' % (
-            i+1, _get_user_real_name(user_id),
+            i + 1, _get_user_real_name(user_id),
             data['%'], data['correct'], data['total'])
-        for i, (user_id, data) in enumerate(leaderboard[:5]))
+        for i, (user_id, data) in enumerate(leaderboard[:5])))
     send_message(channel, message)
 
     return ':+1:'
 
 
 def handle_help(args, channel):
-    return ('To show the leaderboard, /twotruths leaderboard.\n'
+    return ('To show the leaderboard, /twotruths leaderboard [year].\n'
             'To see this help, /twotruths help.')
 
 
