@@ -218,7 +218,7 @@ def handle_leaderboard(args, channel):
             users[user_id]['correct'] = votes
         users[user_id]['total'] += votes
 
-    for user, data in users.items():
+    for user, data in list(users.items()):   # list() so we can delete items
         # TODO(benkraft): reddit comment score instead of threshold
         if data['total'] < 5:
             del users[user]
