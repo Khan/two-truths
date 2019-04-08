@@ -294,7 +294,7 @@ def handle_slash_command():
 
 
 @app.route('/ping', methods=['GET'])
-def handle_slash_command():
+def handle_ping():
     return 'OK', 200
 
 
