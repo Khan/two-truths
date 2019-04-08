@@ -1,5 +1,6 @@
 import collections
 import datetime
+import functools
 import logging
 import re
 import os
@@ -27,13 +28,6 @@ elif os.environ.get('GAE_VERSION'):
 else:
     DATABASE_URI = 'mysql+pymysql://%s:%s@127.0.0.1/%s' % (
         DB_USER, app_secrets.DB_PASSWORD, DB_NAME)
-
-
-_ORDINALS = {
-    1: 'first',
-    2: 'second',
-    3: 'third',
-}
 
 
 app = flask.Flask(__name__)
@@ -93,6 +87,18 @@ def send_message(channel, message):
 
 MENTION_RE = re.compile(r'^<@([A-Z0-9]*)\|([^ >]*)>$')
 EMOJIS = ('one', 'two', 'three')
+ORDINALS = ('first', 'second', 'third')
+
+
+def _in_channel(handler):
+    @functools.wraps(handler)
+    def wrapped(args, channel, user_id):
+        # TODO(benkraft): Use the magic slack in channel syntax instead
+        message = handler(args, channel, user_id)
+        send_message(channel, message)
+        return ':+1:'
+
+    return wrapped
 
 
 def handle_add(args, channel, user_id):
@@ -200,6 +206,7 @@ def handle_close(args, channel, user_id):
     return ':+1:'
 
 
+@_in_channel
 def handle_leaderboard(args, channel, user_id):
     votes = (db.session.query(Vote.user_id, db.func.count(Vote.id),
                               Statement.veracity)
@@ -236,14 +243,11 @@ def handle_leaderboard(args, channel, user_id):
     leaderboard = sorted(users.items(),
                          reverse=True, key=lambda item: item[1]['%'])
 
-    message = "%s:\n%s" % (heading, '\n'.join(
+    return "%s:\n%s" % (heading, '\n'.join(
         '%s. %s with %.0f%% (%s/%s)' % (
             i + 1, _get_user_real_name(user_id),
             data['%'], data['correct'], data['total'])
         for i, (user_id, data) in enumerate(leaderboard[:5])))
-    send_message(channel, message)
-
-    return ':+1:'
 
 
 def _get_positional_stat(stmts):
@@ -255,14 +259,14 @@ def _get_positional_stat(stmts):
     for stmts_for_user in stmts_by_user.values():
         for index, stmt in enumerate(stmts_for_user):
             if not stmt.veracity:
-                by_position[index + 1] += 1
+                by_position[index] += 1
     total = sum(by_position.values())
 
     sorted_positions = sorted(by_position.items(), key=lambda item: item[1])
 
     index, freq = sorted_positions[-1]
     pct = 100 * float(freq) / float(total)
-    return (f'The {_ORDINALS[index]} statement is the most '
+    return (f'The {ORDINALS[index]} statement is the most '
             f'common lie at {pct:.0f}% of the time.')
 
 
@@ -274,6 +278,7 @@ def _get_numbers_stat(stmts):
     return f'Of statements mentioning a number, {pct:.0f}% are lies.'
 
 
+@_in_channel
 def handle_stats(args, channel, user_id):
     heading = 'Two Truths and a Lie Stats'
     stmts = (Statement.query.filter(Statement.veracity.isnot(None))
