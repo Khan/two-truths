@@ -248,11 +248,11 @@ def handle_mystats(args, channel, user_id):
     if not votes:
         return 'No votes recorded for you yet!'
 
-    correct = len([v for ts, veracity in votes if veracity])
+    # TODO: stats by year, etc.
+    correct = len([1 for ts, veracity in votes if not veracity])
     total = len(votes)
     percent = 100 * float(correct) / float(total)
-    return f'Your all time stats: {correct}/{total} ({percent:.0f}%)'
-
+    return f'Your all time stats: {correct}/{total} ({percent:.0f}%).'
 
 
 def handle_help(args, channel, user_id):
@@ -315,7 +315,7 @@ def handle_slash_command():
     channel = flask.request.form.get('channel_id')
     if '__as' in text:
         text, user_mention = text.split('__as')
-        user_id = user_mention.strip('<@>').split('|')[0]
+        user_id = user_mention.strip(' <@>').split('|')[0]
         text = text.rstrip()
     else:
         user_id = flask.request.form.get('user_id')
@@ -324,7 +324,12 @@ def handle_slash_command():
         args = ''
     else:
         command, args = text.split(' ', 1)
-    return HANDLERS.get(command, handle_help)(args, channel, user_id), 200
+    try:
+        return HANDLERS.get(command, handle_help)(args, channel, user_id), 200
+    except Exception as e:
+        logging.exception(e)
+        # We have to give 200 (a lie), or Slack won't even show the message.
+        return f"Something went very wrong: {e}! Ping @benkraft for help.", 200
 
 
 @app.route('/ping', methods=['GET'])
