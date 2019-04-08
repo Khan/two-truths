@@ -29,6 +29,13 @@ else:
         DB_USER, secrets.DB_PASSWORD, DB_NAME)
 
 
+_ORDINALS = {
+    1: 'first',
+    2: 'second',
+    3: 'third',
+}
+
+
 app = flask.Flask(__name__)
 app.config.update({
     'SQLALCHEMY_DATABASE_URI': DATABASE_URI,
@@ -239,6 +246,46 @@ def handle_leaderboard(args, channel, user_id):
     return ':+1:'
 
 
+def _get_positional_stat(stmts):
+    stmts_by_user = collections.defaultdict(list)
+    for stmt in stmts:
+        stmts_by_user[stmt.user_id].append(stmt)
+
+    by_position = collections.defaultdict(int)
+    for stmts_for_user in stmts_by_user.values():
+        for index, stmt in enumerate(stmts_for_user):
+            if not stmt.veracity:
+                by_position[index + 1] += 1
+    total = sum(by_position.values())
+
+    sorted_positions = sorted(by_position.items(), key=lambda item: item[1])
+
+    index, freq = sorted_positions[-1]
+    pct = 100 * float(freq) / float(total)
+    return (f'The {_ORDINALS[index]} statement is the most '
+            f'common lie at {pct:.0f}% of the time.')
+
+
+def _get_numbers_stat(stmts):
+    with_numbers = [stmt for stmt in stmts
+                    if any(char.isdigit() for char in stmt.text)]
+    lies = [stmt for stmt in with_numbers if not stmt.veracity]
+    pct = 100 * float(len(lies)) / float(len(with_numbers))
+    return f'Of statements mentioning a number, {pct:.0f}% are lies.'
+
+
+def handle_stats(args, channel, user_id):
+    heading = 'Two Truths and a Lie Stats'
+    stmts = (Statement.query.filter(Statement.veracity.isnot(None))
+             .order_by(Statement.timestamp).all())
+    stats = [
+        _get_positional_stat(stmts),
+        _get_numbers_stat(stmts),
+    ]
+
+    return '{}:{}'.format(heading, ''.join(f'\n- {s}' for s in stats))
+
+
 def handle_mystats(args, channel, user_id):
     votes = (db.session.query(Statement.timestamp, Statement.veracity)
              .select_from(Vote).join(Statement)
@@ -257,7 +304,8 @@ def handle_mystats(args, channel, user_id):
 
 def handle_help(args, channel, user_id):
     return ('To show the leaderboard, `/twotruths leaderboard [year]`.\n'
-            'To see your stats, `/twotruths leaderboard [year]`.\n'
+            'To see global stats, `/twotruths stats`.\n'
+            'To see your stats, `/twotruths mystats`.\n'
             'To see this help, `/twotruths help`.')
 
 
@@ -299,6 +347,7 @@ HANDLERS = {
     'open': handle_open,
     'close': handle_close,
     'leaderboard': handle_leaderboard,
+    'stats': handle_stats,
     'mystats': handle_mystats,
     'help': handle_help,  # also the default
     'adminhelp': handle_adminhelp,
