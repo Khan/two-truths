@@ -239,17 +239,34 @@ def handle_leaderboard(args, channel, user_id):
     return ':+1:'
 
 
+def handle_mystats(args, channel, user_id):
+    votes = (db.session.query(Statement.timestamp, Statement.veracity)
+             .select_from(Vote).join(Statement)
+             .filter(Vote.user_id == user_id)
+             .filter(Statement.veracity.isnot(None))
+             .all())
+    if not votes:
+        return 'No votes recorded for you yet!'
+
+    correct = len([v for ts, veracity in votes if veracity])
+    total = len(votes)
+    percent = 100 * float(correct) / float(total)
+    return f'Your all time stats: {correct}/{total} ({percent:.0f}%)'
+
+
+
 def handle_help(args, channel, user_id):
-    return ('To show the leaderboard, /twotruths leaderboard [year].\n'
-            'To see this help, /twotruths help.')
+    return ('To show the leaderboard, `/twotruths leaderboard [year]`.\n'
+            'To see your stats, `/twotruths leaderboard [year]`.\n'
+            'To see this help, `/twotruths help`.')
 
 
 def handle_adminhelp(args, channel, user_id):
-    return ('To add a statement, /twotruths add @person Statement text.\n'
-            'To open voting, /twotruths open @person.\n'
-            'To close voting, /twotruths close @person :<lie-emoji>:.\n'
-            'To see this admin help, /twotruths adminhelp.\n'
-            'To see help for user commands, /twotruths help.')
+    return ('To add a statement, `/twotruths add @person Statement text`.\n'
+            'To open voting, `/twotruths open @person`.\n'
+            'To close voting, `/twotruths close @person :<lie-emoji>:`.\n'
+            'To see this admin help, `/twotruths adminhelp`.\n'
+            'To see help for user commands, `/twotruths help`.')
 
 
 def handle_debughelp(args, channel, user_id):
@@ -282,6 +299,7 @@ HANDLERS = {
     'open': handle_open,
     'close': handle_close,
     'leaderboard': handle_leaderboard,
+    'mystats': handle_mystats,
     'help': handle_help,  # also the default
     'adminhelp': handle_adminhelp,
     '__createtables': handle_createtables,
