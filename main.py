@@ -264,6 +264,10 @@ def handle_droptables(args, channel):
     return ':+1:'
 
 
+def handle_version(args, channel):
+    return os.environ.get('GAE_VERSION', '?!')
+
+
 HANDLERS = {
     'add': handle_add,
     'open': handle_open,
@@ -273,6 +277,7 @@ HANDLERS = {
     'adminhelp': handle_adminhelp,
     '__createtables': handle_createtables,
     '__droptables': handle_droptables,
+    'version': handle_version,
 }
 
 
@@ -286,6 +291,11 @@ def handle_slash_command():
     else:
         command, args = text.split(' ', 1)
     return HANDLERS.get(command, handle_help)(args, channel), 200
+
+
+@app.route('/ping', methods=['GET'])
+def handle_slash_command():
+    return 'OK', 200
 
 
 @app.errorhandler(500)
