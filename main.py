@@ -223,11 +223,11 @@ def handle_leaderboard(args, channel):
         if data['total'] < 5:
             del users[user]
 
-    for data in users.itervalues():
+    for data in users.values():
         data['%'] = 100 * float(data.get('correct', 0)) / float(data['total'])
 
-    leaderboard = sorted(users.iteritems(),
-                         reverse=True, key=lambda (k, v): v['%'])
+    leaderboard = sorted(users.items(),
+                         reverse=True, key=lambda item: item[1]['%'])
 
     message = "%s:\n%s" % (heading, '\n'.join(
         '%s. %s with %.0f%% (%s/%s)' % (
