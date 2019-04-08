@@ -127,7 +127,8 @@ def handle_open(args, channel, user_id):
     if not m:
         return usage
     user_id, username = m.groups()
-    if db.session.query(Poll.query.filter_by(user_id=user_id).exists()).scalar():
+    if db.session.query(
+            Poll.query.filter_by(user_id=user_id).exists()).scalar():
         return "There's already a vote on %s!" % username
 
     statements = (Statement.query.filter_by(user_id=user_id)
