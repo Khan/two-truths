@@ -88,7 +88,7 @@ MENTION_RE = re.compile(r'^<@([A-Z0-9]*)\|([^ >]*)>$')
 EMOJIS = ('one', 'two', 'three')
 
 
-def handle_add(args, channel):
+def handle_add(args, channel, user_id):
     usage = "usage: add @person <statement>"
     if ' ' not in args:
         return usage
@@ -108,7 +108,7 @@ def _get_user_real_name(user_id):
     return resp['user']['profile']['real_name'] or '@%s' % resp['user']['name']
 
 
-def handle_open(args, channel):
+def handle_open(args, channel, user_id):
     usage = "usage: open @person"
     m = MENTION_RE.match(args)
     if not m:
@@ -141,7 +141,7 @@ def handle_open(args, channel):
     return ':+1:'
 
 
-def handle_close(args, channel):
+def handle_close(args, channel, user_id):
     usage = "usage: close @person :<lie>:"
     if ' ' not in args:
         return usage
@@ -193,7 +193,7 @@ def handle_close(args, channel):
     return ':+1:'
 
 
-def handle_leaderboard(args, channel):
+def handle_leaderboard(args, channel, user_id):
     votes = (db.session.query(Vote.user_id, db.func.count(Vote.id),
                               Statement.veracity)
              .select_from(Vote).join(Statement)
@@ -239,12 +239,12 @@ def handle_leaderboard(args, channel):
     return ':+1:'
 
 
-def handle_help(args, channel):
+def handle_help(args, channel, user_id):
     return ('To show the leaderboard, /twotruths leaderboard [year].\n'
             'To see this help, /twotruths help.')
 
 
-def handle_adminhelp(args, channel):
+def handle_adminhelp(args, channel, user_id):
     return ('To add a statement, /twotruths add @person Statement text.\n'
             'To open voting, /twotruths open @person.\n'
             'To close voting, /twotruths close @person :<lie-emoji>:.\n'
@@ -252,20 +252,29 @@ def handle_adminhelp(args, channel):
             'To see help for user commands, /twotruths help.')
 
 
-def handle_createtables(args, channel):
+def handle_debughelp(args, channel, user_id):
+    return ('Commands include: '
+            '__createtables, __droptables, __version, __whoami')
+
+
+def handle_createtables(args, channel, user_id):
     logging.warning("DATABASE URI:", DATABASE_URI)
     db.create_all()
     return ':+1:'
 
 
-def handle_droptables(args, channel):
+def handle_droptables(args, channel, user_id):
     logging.warning("DATABASE URI:", DATABASE_URI)
     db.drop_all()
     return ':+1:'
 
 
-def handle_version(args, channel):
+def handle_version(args, channel, user_id):
     return os.environ.get('GAE_VERSION', '?!')
+
+
+def handle_whoami(args, channel, user_id):
+    return f'Hello, <@{user_id}>!'
 
 
 HANDLERS = {
@@ -277,7 +286,8 @@ HANDLERS = {
     'adminhelp': handle_adminhelp,
     '__createtables': handle_createtables,
     '__droptables': handle_droptables,
-    'version': handle_version,
+    '__version': handle_version,
+    '__whoami': handle_whoami,
 }
 
 
@@ -285,12 +295,18 @@ HANDLERS = {
 def handle_slash_command():
     text = flask.request.form.get('text')
     channel = flask.request.form.get('channel_id')
+    if '__as' in text:
+        text, user_mention = text.split('__as')
+        user_id = user_mention.strip('<@>').split('|')[0]
+        text = text.rstrip()
+    else:
+        user_id = flask.request.form.get('user_id')
     if not text or ' ' not in text:
         command = text
         args = ''
     else:
         command, args = text.split(' ', 1)
-    return HANDLERS.get(command, handle_help)(args, channel), 200
+    return HANDLERS.get(command, handle_help)(args, channel, user_id), 200
 
 
 @app.route('/ping', methods=['GET'])
