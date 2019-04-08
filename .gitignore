@@ -1,4 +1,4 @@
 .credentials.json
-secrets.py
+app_secrets.py
 db.sqlite
 .env

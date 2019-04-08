@@ -8,7 +8,7 @@ import flask
 import flask_sqlalchemy
 import requests
 
-import secrets
+import app_secrets
 
 
 DB_INSTANCE = 'two-truths:us-central1:two-truths'
@@ -23,10 +23,10 @@ if os.environ.get('DEBUG', 'true').lower() == 'true':
 elif os.environ.get('GAE_VERSION'):
     path = '/cloudsql/%s' % DB_INSTANCE
     DATABASE_URI = 'mysql+pymysql://%s:%s@/%s?unix_socket=/cloudsql/%s' % (
-        DB_USER, secrets.DB_PASSWORD, DB_NAME, DB_INSTANCE)
+        DB_USER, app_secrets.DB_PASSWORD, DB_NAME, DB_INSTANCE)
 else:
     DATABASE_URI = 'mysql+pymysql://%s:%s@127.0.0.1/%s' % (
-        DB_USER, secrets.DB_PASSWORD, DB_NAME)
+        DB_USER, app_secrets.DB_PASSWORD, DB_NAME)
 
 
 _ORDINALS = {
@@ -75,7 +75,7 @@ class Poll(db.Model):
 def call_slack_api(call, data=None):
     data = data or {}
     logging.debug("Sending to slack: %s", data)
-    data['token'] = secrets.TOKEN
+    data['token'] = app_secrets.TOKEN
     res = requests.post('https://slack.com/api/' + call, data).json()
     logging.debug("Got from slack: %s", res)
     if res.get('ok'):
