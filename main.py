@@ -271,12 +271,36 @@ def _get_positional_stat(stmts):
             f'common lie at {pct:.0f}% of the time.')
 
 
-def _get_numbers_stat(stmts):
-    with_numbers = [stmt for stmt in stmts
-                    if any(char.isdigit() for char in stmt.text)]
-    lies = [stmt for stmt in with_numbers if not stmt.veracity]
-    pct = 100 * float(len(lies)) / float(len(with_numbers))
-    return f'Of statements mentioning a number, {pct:.0f}% are lies.'
+def _make_fraction_lies_stat_getter(description, predicate):
+    def getter(stmts):
+        matching = [stmt for stmt in stmts if predicate(stmt)]
+        num = len(matching)
+        lies = [stmt for stmt in matching if not stmt.veracity]
+        pct = 100 * float(len(lies)) / float(num)
+        return f'Of {num} statements {description}, {pct:.0f}% are lies.'
+
+    return getter
+
+
+_STAT_GETTERS = [
+    _get_positional_stat,
+    _make_fraction_lies_stat_getter(
+        'mentioning a number',
+        lambda stmt: any(char.isdigit() for char in stmt.text)),
+    _make_fraction_lies_stat_getter(
+        'mentioning a number of two or more digits',
+        lambda stmt: any(word.isdigit() and len(word) > 1
+                         for word in stmt.text.split())),
+    _make_fraction_lies_stat_getter(
+        'mentioning a child',
+        lambda stmt: ('child' in stmt.text or 'son' in stmt.text
+                      or 'daughter' in stmt.text)),
+    _make_fraction_lies_stat_getter(
+        'mentioning a parent',
+        lambda stmt: ('parent' in stmt.text or 'mom' in stmt.text
+                      or 'mother' in stmt.text or 'dad' in stmt.text
+                      or 'father' in stmt.text)),
+]
 
 
 @_in_channel
@@ -284,11 +308,7 @@ def handle_stats(args, channel, user_id):
     heading = 'Two Truths and a Lie Stats'
     stmts = (Statement.query.filter(Statement.veracity.isnot(None))
              .order_by(Statement.timestamp).all())
-    stats = [
-        _get_positional_stat(stmts),
-        _get_numbers_stat(stmts),
-    ]
-
+    stats = [getter(stmts) for getter in _STAT_GETTERS]
     return '{}:{}'.format(heading, ''.join(f'\n- {s}' for s in stats))
 
 
