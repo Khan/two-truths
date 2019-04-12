@@ -1,7 +1,9 @@
+#!/usr/bin/env python3
 import collections
 import datetime
 import functools
 import logging
+import random
 import re
 import os
 
@@ -282,6 +284,35 @@ def _make_fraction_lies_stat_getter(description, predicate):
     return getter
 
 
+def _common_words(stmts):
+    return collections.Counter(word.lower() for stmt in stmts
+                               for word in stmt.text.split())
+
+
+def _get_common_words_stat(stmts):
+    true_words = _common_words(stmt for stmt in stmts if stmt.veracity)
+    false_words = _common_words(stmt for stmt in stmts if not stmt.veracity)
+
+    true_only = None
+    for word, ct in true_words.most_common():
+        if word not in false_words:
+            true_only = (word, ct)
+            break
+
+    false_only = None
+    for word, ct in false_words.most_common():
+        if word not in true_words:
+            false_only = (word, ct)
+            break
+
+    return [
+        f"The word '{true_only[0]}' is the most common word in truths "
+        f"({true_only[1]} times) which does not appear in any lie.",
+        f"The word '{false_only[0]}' is the most common word in lies "
+        f"({false_only[1]} times) which does not appear in any truth.",
+    ]
+
+
 _STAT_GETTERS = [
     _get_positional_stat,
     _make_fraction_lies_stat_getter(
@@ -300,6 +331,7 @@ _STAT_GETTERS = [
         lambda stmt: ('parent' in stmt.text or 'mom' in stmt.text
                       or 'mother' in stmt.text or 'dad' in stmt.text
                       or 'father' in stmt.text)),
+    _get_common_words_stat,
 ]
 
 
@@ -308,7 +340,13 @@ def handle_stats(args, channel, user_id):
     heading = 'Two Truths and a Lie Stats'
     stmts = (Statement.query.filter(Statement.veracity.isnot(None))
              .order_by(Statement.timestamp).all())
-    stats = [getter(stmts) for getter in _STAT_GETTERS]
+    stats = []
+    for getter in _STAT_GETTERS:
+        stat = getter(stmts)
+        if isinstance(stat, (list, tuple)):
+            stats.extend(stat)
+        else:
+            stats.append(stat)
     return '{}:{}'.format(heading, ''.join(f'\n- {s}' for s in stats))
 
 
