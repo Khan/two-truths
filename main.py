@@ -70,7 +70,7 @@ class Poll(db.Model):
 def call_slack_api(call, data=None):
     data = data or {}
     logging.debug("Sending to slack: %s", data)
-    data['token'] = app_secrets.TOKEN
+    data['token'] = app_secrets.BOT_TOKEN
     res = requests.post('https://slack.com/api/' + call, data).json()
     logging.debug("Got from slack: %s", res)
     if res.get('ok'):
@@ -423,6 +423,9 @@ HANDLERS = {
 
 @app.route('/command', methods=['POST'])
 def handle_slash_command():
+    if flask.request.form.get('token') != app_secrets.VERIFICATION_TOKEN:
+        return "unauthorized :(", 200
+
     text = flask.request.form.get('text')
     channel = flask.request.form.get('channel_id')
     if '__as' in text:
