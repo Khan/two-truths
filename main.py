@@ -46,9 +46,18 @@ class SlackError(Exception):
     pass
 
 
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(64), nullable=False)
+
+
 class Statement(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.String(32), nullable=False)
+    user_id = db.Column('uid', db.ForeignKey(User.id), nullable=False)
+    user = db.relationship("User")
+    # TODO: delete old versions
+    slack_user_id = db.Column('user_id', db.String(32), nullable=True)
+
     text = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, nullable=False)
     veracity = db.Column(db.Boolean)
@@ -56,7 +65,7 @@ class Statement(db.Model):
 
 class Vote(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.String(32), nullable=False)
+    slack_user_id = db.Column('user_id', db.String(32), nullable=True)
     statement_id = db.Column(db.ForeignKey(Statement.id), nullable=False)
 
     statement = db.relationship("Statement")
@@ -64,7 +73,11 @@ class Vote(db.Model):
 
 class Poll(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.String(32), nullable=False)
+    user_id = db.Column('uid', db.ForeignKey(User.id), nullable=False)
+    user = db.relationship("User")
+    # TODO: delete old versions
+    slack_user_id = db.Column('user_id', db.String(32), nullable=True)
+
     ts = db.Column(db.String(32), nullable=False)
     closed = db.Column(db.Boolean, nullable=False, default=False)
     timestamp = db.Column(db.DateTime, nullable=False)
@@ -124,6 +137,7 @@ def handle_new(args, channel, user_id):
     }]}
 
 
+# TODO: delete old versions
 def handle_add(args, channel, user_id):
     usage = "usage: add @person <statement>"
     if ' ' not in args:
@@ -132,18 +146,20 @@ def handle_add(args, channel, user_id):
     m = MENTION_RE.match(mention)
     if not m:
         return usage
-    statement = Statement(user_id=m.group(1), text=statement,
+    statement = Statement(slack_user_id=m.group(1), text=statement,
                           timestamp=datetime.datetime.utcnow())
     db.session.add(statement)
     db.session.commit()
     return ':+1:'
 
 
+# TODO: delete old versions
 def _get_user_real_name(user_id):
     resp = call_slack_api('users.info', {'user': user_id})
     return resp['user']['profile']['real_name'] or '@%s' % resp['user']['name']
 
 
+# TODO: delete old versions
 def handle_open(args, channel, user_id):
     usage = "usage: open @person"
     m = MENTION_RE.match(args)
@@ -151,17 +167,17 @@ def handle_open(args, channel, user_id):
         return usage
     user_id, username = m.groups()
     if db.session.query(
-            Poll.query.filter_by(user_id=user_id).exists()).scalar():
+            Poll.query.filter_by(slack_user_id=user_id).exists()).scalar():
         return "There's already a vote on %s!" % username
 
-    statements = (Statement.query.filter_by(user_id=user_id)
+    statements = (Statement.query.filter_by(slack_user_id=user_id)
                   .order_by(Statement.timestamp).all())
     if len(statements) != 3:
         return "%s has %s statements, not 3." % (username, len(statements))
 
     message = ("Time to vote on %s's three statements!  "
                "React with the number of the lie.\n%s" %
-               (_get_user_real_name(statements[0].user_id),
+               (_get_user_real_name(statements[0].slack_user_id),
                 '\n'.join(':%s: %s' % (emoji, statement.text)
                           for emoji, statement in zip(EMOJIS, statements))))
     resp = send_message(channel, message)
@@ -172,13 +188,14 @@ def handle_open(args, channel, user_id):
                        {'name': emoji, 'channel': channel,
                         'timestamp': resp['ts']})
 
-    db.session.add(Poll(user_id=user_id, ts=resp['ts'],
+    db.session.add(Poll(slack_user_id=user_id, ts=resp['ts'],
                         timestamp=datetime.datetime.now()))
     db.session.commit()
     return ':+1:'
 
 
-def handle_close(args, channel, user_id):
+# TODO: delete old versions
+def handle_oldclose(args, channel, user_id):
     usage = "usage: close @person :<lie>:"
     if ' ' not in args:
         return usage
@@ -193,13 +210,16 @@ def handle_close(args, channel, user_id):
     if lie not in EMOJIS:
         return usage
 
-    poll = Poll.query.filter_by(user_id=user_id).one_or_none()
+    poll = Poll.query.filter_by(slack_user_id=user_id).one_or_none()
     if not poll:
         return "There's not a vote on %s!" % username
     if poll.closed:
         return "The vote on %s is already closed!" % username
 
-    statements = (Statement.query.filter_by(user_id=user_id)
+    poll.closed = True
+    db.session.add(poll)
+
+    statements = (Statement.query.filter_by(slack_user_id=user_id)
                   .order_by(Statement.timestamp).all())
 
     for emoji, statement in zip(EMOJIS, statements):
@@ -220,7 +240,55 @@ def handle_close(args, channel, user_id):
         if reaction['name'] in EMOJIS:
             statement_id = statements[EMOJIS.index(reaction['name'])].id
             db.session.add_all([
-                Vote(user_id=u, statement_id=statement_id)
+                Vote(slack_user_id=u, statement_id=statement_id)
+                for u in reaction['users']])
+
+    resp = send_message(
+        channel, "The lie was :%s:!  Thanks for playing." % lie)
+
+    db.session.commit()
+    return ':+1:'
+
+
+def handle_close(args, channel, user_id):
+    usage = "usage: close :<lie>:"
+    if ' ' in args:
+        return usage
+    lie = args
+
+    lie = lie.strip().strip(':')
+    if lie not in EMOJIS:
+        return usage
+
+    poll = Poll.query.filter_by(closed=False).one_or_none()
+    if not poll:
+        return "There's no vote open!"
+
+    poll.closed = True
+    db.session.add(poll)
+
+    statements = (Statement.query.filter_by(user=poll.user)
+                  .order_by(Statement.timestamp).all())
+
+    for emoji, statement in zip(EMOJIS, statements):
+        if emoji == lie:
+            statement.veracity = False
+        else:
+            statement.veracity = True
+
+    for emoji in EMOJIS:
+        call_slack_api('reactions.remove',
+                       {'name': emoji, 'channel': channel,
+                        'timestamp': poll.ts})
+    resp = call_slack_api('reactions.get',
+                          {'timestamp': poll.ts, 'channel': channel,
+                           'full': True})
+
+    for reaction in resp['message']['reactions']:
+        if reaction['name'] in EMOJIS:
+            statement_id = statements[EMOJIS.index(reaction['name'])].id
+            db.session.add_all([
+                Vote(slack_user_id=u, statement_id=statement_id)
                 for u in reaction['users']])
 
     resp = send_message(
@@ -232,7 +300,7 @@ def handle_close(args, channel, user_id):
 
 @_in_channel
 def handle_leaderboard(args, channel, user_id):
-    votes = (db.session.query(Vote.user_id, db.func.count(Vote.id),
+    votes = (db.session.query(Vote.slack_user_id, db.func.count(Vote.id),
                               Statement.veracity)
              .select_from(Vote).join(Statement)
              .filter(Statement.veracity.isnot(None)))
@@ -248,7 +316,7 @@ def handle_leaderboard(args, channel, user_id):
         except Exception:
             return "%s doesn't seem like a valid year to me!" % args
 
-    votes = votes.group_by(Vote.user_id, Statement.veracity).all()
+    votes = votes.group_by(Vote.slack_user_id, Statement.veracity).all()
 
     users = collections.defaultdict(lambda: {'total': 0})
     for user_id, votes, veracity in votes:
@@ -277,7 +345,7 @@ def handle_leaderboard(args, channel, user_id):
 def _get_positional_stat(stmts):
     stmts_by_user = collections.defaultdict(list)
     for stmt in stmts:
-        stmts_by_user[stmt.user_id].append(stmt)
+        stmts_by_user[stmt.slack_user_id].append(stmt)
 
     by_position = collections.defaultdict(int)
     for stmts_for_user in stmts_by_user.values():
@@ -374,7 +442,7 @@ def handle_stats(args, channel, user_id):
 def handle_mystats(args, channel, user_id):
     votes = (db.session.query(Statement.timestamp, Statement.veracity)
              .select_from(Vote).join(Statement)
-             .filter(Vote.user_id == user_id)
+             .filter(Vote.slack_user_id == user_id)
              .filter(Statement.veracity.isnot(None))
              .all())
     if not votes:
@@ -388,34 +456,28 @@ def handle_mystats(args, channel, user_id):
 
 
 def handle_help(args, channel, user_id):
-    return ('To show the leaderboard, `/twotruths leaderboard [year]`.\n'
-            'To see global stats, `/twotruths stats`.\n'
+    return ('To post the leaderboard in this channel, '
+            '`/twotruths leaderboard [year]`.\n'
+            'To post global stats in this channel, `/twotruths stats`.\n'
             'To see your stats, `/twotruths mystats`.\n'
             'To see this help, `/twotruths help`.')
 
 
 def handle_adminhelp(args, channel, user_id):
-    return ('To add a statement, `/twotruths add @person Statement text`.\n'
-            'To open voting, `/twotruths open @person`.\n'
-            'To close voting, `/twotruths close @person :<lie-emoji>:`.\n'
+    return ('To enter statements, `/twotruths new`.\n'
+            'To close voting, `/twotruths close`.\n'
             'To see this admin help, `/twotruths adminhelp`.\n'
             'To see help for user commands, `/twotruths help`.')
 
 
 def handle_debughelp(args, channel, user_id):
     return ('Commands include: '
-            '__createtables, __droptables, __version, __whoami')
+            '__createtables, __version, __whoami')
 
 
 def handle_createtables(args, channel, user_id):
     logging.warning("DATABASE URI:", DATABASE_URI)
     db.create_all()
-    return ':+1:'
-
-
-def handle_droptables(args, channel, user_id):
-    logging.warning("DATABASE URI:", DATABASE_URI)
-    db.drop_all()
     return ':+1:'
 
 
@@ -431,6 +493,7 @@ HANDLERS = {
     'new': handle_new,
     'add': handle_add,
     'open': handle_open,
+    'oldclose': handle_oldclose,
     'close': handle_close,
     'leaderboard': handle_leaderboard,
     'stats': handle_stats,
@@ -438,7 +501,6 @@ HANDLERS = {
     'help': handle_help,  # also the default
     'adminhelp': handle_adminhelp,
     '__createtables': handle_createtables,
-    '__droptables': handle_droptables,
     '__version': handle_version,
     '__whoami': handle_whoami,
 }
@@ -481,12 +543,13 @@ def handle_new_modal(payload):
             'callback_id': 'new',
             'title': {
                 'type': 'plain_text',
-                'text': 'New Two Truths and a Lie',
+                'text': "New Two Truths and a Lie",
             },
             'submit': {
                 'type': 'plain_text',
                 'text': 'Submit',
             },
+            'private_metadata': payload['channel']['id'],
             'blocks': [
                 {
                     'type': 'input',
@@ -519,10 +582,46 @@ def handle_new_modal(payload):
     return '', 200
 
 
+def _error(**kwargs):
+    return flask.jsonify({
+        'response_action': 'errors',
+        'errors': kwargs,
+    })
+
+
 def handle_new_submit(payload):
     values = payload['view']['state']['values']
     name = values['name']['name']['value']
-    statements = values['statements']['statements']['value'].split('\n')
+    statements = values['statements']['statements']['value']
+    statements = [s.strip() for s in statements.strip().split('\n')]
+    channel_id = payload['view']['private_metadata']
+
+    if len(statements) != 3:
+        return _error(statements=f'need 3 statements, got {len(statements)}')
+
+    u = User(name=name)
+    db.session.add(u)
+    for statement in statements:
+        db.session.add(
+            Statement(user=u, text=statement,
+                      timestamp=datetime.datetime.utcnow()))
+
+    message = ("Time to vote on %s's three statements!  "
+               "React with the number of the lie.\n%s" %
+               (name, '\n'.join(
+                   ':%s: %s' % (emoji, statement)
+                   for emoji, statement in zip(EMOJIS, statements))))
+    resp = send_message(channel_id, message)
+
+    for emoji in EMOJIS:
+        # Add initial reactions.
+        call_slack_api('reactions.add',
+                       {'name': emoji, 'channel': channel_id,
+                        'timestamp': resp['ts']})
+
+    db.session.add(Poll(user=u, ts=resp['ts'],
+                        timestamp=datetime.datetime.now()))
+    db.session.commit()
 
     return '', 200
 
@@ -544,10 +643,10 @@ def handle_interactive():
         if type in ('block_actions', 'interactive_message'):
             for action in payload['actions']:
                 action_id = action['action_id']
-                return flask.jsonify(ACTION_HANDLERS[action_id](payload))
+                return ACTION_HANDLERS[action_id](payload)
         elif payload.get('type') == 'view_submission':
             cb = payload.get('view').get('callback_id')
-            return flask.jsonify(MODAL_HANDLERS[cb](payload))
+            return MODAL_HANDLERS[cb](payload)
         elif payload.get('type') == 'view_closed':
             pass
         else:
