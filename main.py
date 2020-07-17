@@ -2,6 +2,7 @@
 import collections
 import datetime
 import functools
+import json
 import logging
 import re
 import os
@@ -11,6 +12,8 @@ import flask_sqlalchemy
 import requests
 
 import app_secrets
+
+logging.root.setLevel(logging.DEBUG)
 
 
 DB_INSTANCE = 'two-truths:us-central1:two-truths'
@@ -67,16 +70,21 @@ class Poll(db.Model):
     timestamp = db.Column(db.DateTime, nullable=False)
 
 
-def call_slack_api(call, data=None):
+def call_slack_api(call, data=None, use_json=False):
     data = data or {}
     logging.debug("Sending to slack: %s", data)
-    data['token'] = app_secrets.BOT_TOKEN
-    res = requests.post('https://slack.com/api/' + call, data).json()
+    headers = {'Authorization': f'Bearer {app_secrets.BOT_TOKEN}'}
+    if use_json:
+        kwargs = {'json': data}
+    else:
+        kwargs = {'data': data}
+    res = requests.post('https://slack.com/api/' + call, headers=headers,
+                        **kwargs).json()
     logging.debug("Got from slack: %s", res)
     if res.get('ok'):
         return res
     else:
-        raise SlackError(res.get('error', str(res)))
+        raise SlackError(json.dumps(res))
 
 
 def send_message(channel, message):
@@ -100,6 +108,20 @@ def _in_channel(handler):
         return ':+1:'
 
     return wrapped
+
+
+def handle_new(args, channel, user_id):
+    return {'blocks': [{
+        'type': 'actions',
+        'elements': [{
+            'type': 'button',
+            'action_id': 'new',
+            'text': {
+                'type': 'plain_text',
+                'text': 'click me',
+            },
+        }],
+    }]}
 
 
 def handle_add(args, channel, user_id):
@@ -406,6 +428,7 @@ def handle_whoami(args, channel, user_id):
 
 
 HANDLERS = {
+    'new': handle_new,
     'add': handle_add,
     'open': handle_open,
     'close': handle_close,
@@ -440,10 +463,99 @@ def handle_slash_command():
     else:
         command, args = text.split(' ', 1)
     try:
-        return HANDLERS.get(command, handle_help)(args, channel, user_id), 200
+        resp = HANDLERS.get(command, handle_help)(args, channel, user_id)
+        if not isinstance(resp, str):
+            return flask.jsonify(resp)
+        return resp, 200
     except Exception as e:
         logging.exception(e)
         # We have to give 200 (a lie), or Slack won't even show the message.
+        return f"Something went very wrong: {e}! Ping @benkraft for help.", 200
+
+
+def handle_new_modal(payload):
+    call_slack_api('views.open', {
+        'trigger_id': payload['trigger_id'],
+        'view': {
+            'type': 'modal',
+            'callback_id': 'new',
+            'title': {
+                'type': 'plain_text',
+                'text': 'New Two Truths and a Lie',
+            },
+            'submit': {
+                'type': 'plain_text',
+                'text': 'Submit',
+            },
+            'blocks': [
+                {
+                    'type': 'input',
+                    'block_id': 'name',
+                    'element': {
+                        'type': 'plain_text_input',
+                        'action_id': 'name',
+                    },
+                    'label': {
+                        'type': 'plain_text',
+                        'text': 'Name',
+                    },
+                },
+                {
+                    'type': 'input',
+                    'block_id': 'statements',
+                    'element': {
+                        'type': 'plain_text_input',
+                        'action_id': 'statements',
+                        'multiline': True,
+                    },
+                    'label': {
+                        'type': 'plain_text',
+                        'text': 'Statements (one per line)',
+                    },
+                },
+            ],
+        },
+    }, use_json=True)
+    return '', 200
+
+
+def handle_new_submit(payload):
+    values = payload['view']['state']['values']
+    name = values['name']['name']['value']
+    statements = values['statements']['statements']['value'].split('\n')
+
+    return '', 200
+
+
+ACTION_HANDLERS = {
+    'new': handle_new_modal,
+}
+
+MODAL_HANDLERS = {
+    'new': handle_new_submit,
+}
+
+
+@app.route('/interactive', methods=['POST'])
+def handle_interactive():
+    payload = json.loads(flask.request.form.get('payload'))
+    type = payload.get('type')
+    try:
+        if type in ('block_actions', 'interactive_message'):
+            for action in payload['actions']:
+                action_id = action['action_id']
+                return flask.jsonify(ACTION_HANDLERS[action_id](payload))
+        elif payload.get('type') == 'view_submission':
+            cb = payload.get('view').get('callback_id')
+            return flask.jsonify(MODAL_HANDLERS[cb](payload))
+        elif payload.get('type') == 'view_closed':
+            pass
+        else:
+            logging.error("Unknown interactive type %s", type)
+            return f"unknown interactive type {type}", 200
+    except Exception as e:
+        logging.exception(e)
+        # Not sure if we can get slack to show this...
         return f"Something went very wrong: {e}! Ping @benkraft for help.", 200
 
 
