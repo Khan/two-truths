@@ -4,6 +4,7 @@ import datetime
 import functools
 import json
 import logging
+import random
 import re
 import os
 
@@ -13,9 +14,6 @@ import requests
 
 import app_secrets
 import stats
-
-logging.root.setLevel(logging.DEBUG)
-
 
 DB_INSTANCE = 'two-truths:us-central1:two-truths'
 DB_USER = 'two_truths'
@@ -44,6 +42,10 @@ db = flask_sqlalchemy.SQLAlchemy(app)
 
 
 class SlackError(Exception):
+    pass
+
+
+class InvalidInput(Exception):
     pass
 
 
@@ -299,23 +301,32 @@ def handle_close(args, channel, user_id):
     return ':+1:'
 
 
-@_in_channel
-def handle_leaderboard(args, channel, user_id):
+def _maybe_filter_stmts_for_year(q, year):
+    if not year:
+        return q
+
+    start = datetime.datetime(year, 1, 1)
+    end = datetime.datetime(year + 1, 1, 1)
+    return (q.filter(Statement.timestamp >= start)
+            .filter(Statement.timestamp < end))
+
+
+def _rankings(year):
+    """Returns list of dicts, unsorted.
+
+    Keys of dicts:
+        user_id: string
+        total, correct: ints
+        desc: <percentage> (correct/total)
+        lb, ub: CI lower/upper bounds for ranking
+        k: ranking (CI lower bound)
+    """
     votes = (db.session.query(Vote.slack_user_id, db.func.count(Vote.id),
                               Statement.veracity)
              .select_from(Vote).join(Statement)
              .filter(Statement.veracity.isnot(None)))
-    heading = "Two Truths and a Lie Leaderboard"
-    if args.isdigit():
-        try:
-            year = int(args)
-            start = datetime.datetime(year, 1, 1)
-            end = datetime.datetime(year + 1, 1, 1)
-            votes = (votes.filter(Statement.timestamp >= start)
-                     .filter(Statement.timestamp < end))
-            heading = "%s %s" % (heading, args)
-        except Exception:
-            return "%s doesn't seem like a valid year to me!" % args
+
+    votes = _maybe_filter_stmts_for_year(votes, year)
 
     votes = votes.group_by(Vote.slack_user_id, Statement.veracity).all()
 
@@ -328,41 +339,139 @@ def handle_leaderboard(args, channel, user_id):
     for user, data in list(users.items()):   # list() so we can delete items
         if data['total'] < 5:
             del users[user]
+        data['user_id'] = user
+        data.setdefault('correct', 0)
+        data.setdefault('total', 0)
 
-    for data in users.values():
-        correct = data.get('correct', 0)
-        total = data.get('total', 0)
-        data['k'], _ = stats.ci_bounds(correct, total)
-        data['%'] = 100 * float(correct) / float(total)
+    rankings = list(users.values())
 
-    leaderboard = sorted(users.items(),
-                         reverse=True, key=lambda item: item[1]['k'])
+    for data in rankings:
+        correct = data['correct']
+        total = data['total']
+        data['lb'], data['ub'] = stats.ci_bounds(correct, total)
+        data['desc'] = '%.0f%% (%s/%s)' % (
+            100 * float(correct) / float(total), correct, total)
+
+    return rankings
+
+
+def _coerce_year(args, heading):
+    if not args.isdigit():
+        return None, heading % 'All Time'
+
+    try:
+        return int(args), heading % args
+    except Exception:
+        raise InvalidInput("%s doesn't seem like a valid year to me!" % args)
+
+
+@_in_channel
+def handle_leaderboard(args, channel, user_id):
+    year, heading = _coerce_year(args, "Two Truths and a Lie Leaderboard %s")
+
+    rankings = _rankings(year)
+    rankings = sorted(rankings, reverse=True,
+                      key=lambda data: (data['lb'], random.random()))
 
     return "%s:\n%s" % (heading, '\n'.join(
-        '%s. %s with %.0f%% (%s/%s)' % (
-            i + 1, _get_user_real_name(user_id),
-            data['%'], data['correct'], data['total'])
-        for i, (user_id, data) in enumerate(leaderboard[:5])))
+        '%s. %s with %s' % (
+            i + 1, _get_user_real_name(data['user_id']), data['desc'])
+        for i, data in enumerate(rankings[:10])))
 
 
-def _get_positional_stat(stmts):
-    stmts_by_user = collections.defaultdict(list)
-    for stmt in stmts:
-        stmts_by_user[stmt.slack_user_id].append(stmt)
+def _tellers(year):
+    votes = (db.session.query(User.id, User.name, Statement.veracity,
+                              db.func.count(Vote.id))
+             .select_from(Vote).join(Statement).join(User)
+             .filter(Statement.veracity.isnot(None)))
 
-    by_position = collections.defaultdict(int)
-    for stmts_for_user in stmts_by_user.values():
-        for index, stmt in enumerate(stmts_for_user):
-            if not stmt.veracity:
-                by_position[index] += 1
-    total = sum(by_position.values())
+    votes = _maybe_filter_stmts_for_year(votes, year)
 
-    sorted_positions = sorted(by_position.items(), key=lambda item: item[1])
+    votes = votes.group_by(User.id, User.name, Statement.veracity).all()
 
-    index, freq = sorted_positions[-1]
-    pct = 100 * float(freq) / float(total)
-    return (f'The {ORDINALS[index]} statement is the most '
-            f'common lie at {pct:.0f}% of the time.')
+    users = collections.defaultdict(lambda: {'total': 0})
+    for user_id, name, veracity, votes in votes:
+        if not veracity:
+            users[user_id]['correct'] = votes
+        users[user_id]['total'] += votes
+        users[user_id]['name'] = name
+
+    for user, data in list(users.items()):   # list() so we can delete items
+        if data['total'] < 10:
+            del users[user]
+        data['user_id'] = user
+        data.setdefault('correct', 0)
+        data.setdefault('total', 0)
+
+    rankings = list(users.values())
+
+    for data in rankings:
+        correct = data['correct']
+        total = data['total']
+        data['lb'], data['ub'] = stats.ci_bounds(correct, total)
+        data['desc'] = '%.0f%% (%s/%s)' % (
+            100 * float(correct) / float(total), correct, total)
+
+    return rankings
+
+
+def _first_by(l, f):
+    return sorted(l, reverse=True,
+                  key=lambda data: (f(data), random.random()))[0]
+
+
+@_in_channel
+def handle_winners(args, channel, user_id):
+    year, heading = _coerce_year(args, "Two Truths and a Lie Winners %s")
+
+    rankings = _rankings(year)
+    tellers = _tellers(year)
+
+    winners = [
+        # (category, data obj)
+        ('Shrewdest', _first_by(rankings, lambda data: data['lb'])),
+        ('Most credulous', _first_by(rankings, lambda data: -data['ub'])),
+        ('Most prolific', _first_by(rankings, lambda data: data['total'])),
+        ('Best liar', _first_by(tellers, lambda data: -data['ub'])),
+        ('Most honest', _first_by(tellers, lambda data: data['ub'])),
+    ]
+
+    return '%s:\n%s' % (heading, '\n'.join(
+        '%s: %s with %s' % (
+            category,
+            data.get('name') or _get_user_real_name(data['user_id']),
+            data['desc'])
+        for category, data in winners))
+
+
+def _get_count(stmts):
+    return f"We have data for {int(len(stmts)/3)} participants so far."
+
+
+def _make_common_lies_stat_getter(key_fn, desc_dict):
+    def getter(stmts):
+        stmts_by_user = collections.defaultdict(list)
+        for stmt in stmts:
+            stmts_by_user[stmt.user_id].append(stmt)
+
+        by_position = collections.defaultdict(int)
+        for stmts_for_user in stmts_by_user.values():
+            if key_fn:
+                stmts_for_user = sorted(stmts_for_user, key=key_fn)
+            for index, stmt in enumerate(stmts_for_user):
+                if not stmt.veracity:
+                    by_position[index] += 1
+        total = sum(by_position.values())
+
+        sorted_positions = sorted(
+            by_position.items(), key=lambda item: item[1])
+
+        index, freq = sorted_positions[-1]
+        pct = 100 * float(freq) / float(total)
+        return (f'The {desc_dict[index]} statement is the most '
+                f'common lie at {pct:.0f}% of the time.')
+
+    return getter
 
 
 def _make_fraction_lies_stat_getter(description, predicate):
@@ -381,7 +490,7 @@ def _common_words(stmts):
                                for word in stmt.text.split())
 
 
-def _get_common_words_stat(stmts):
+def _get_common_words_stats(stmts):
     true_words = _common_words(stmt for stmt in stmts if stmt.veracity)
     false_words = _common_words(stmt for stmt in stmts if not stmt.veracity)
 
@@ -406,7 +515,11 @@ def _get_common_words_stat(stmts):
 
 
 _STAT_GETTERS = [
-    _get_positional_stat,
+    _get_count,
+    _make_common_lies_stat_getter(None, ORDINALS),
+    _make_common_lies_stat_getter(
+        lambda stmt: len(stmt.text),
+        {0: 'shortest', 1: 'middle-length', 2: 'longest'}),
     _make_fraction_lies_stat_getter(
         'mentioning a number',
         lambda stmt: any(char.isdigit() for char in stmt.text)),
@@ -414,26 +527,37 @@ _STAT_GETTERS = [
         'mentioning a number of two or more digits',
         lambda stmt: any(word.isdigit() and len(word) > 1
                          for word in stmt.text.split())),
+    lambda stmts: (
+        _make_fraction_lies_stat_getter(
+            'mentioning a child',
+            lambda stmt: ('child' in stmt.text or 'kid' in stmt.text
+                          or 'son' in stmt.text
+                          or 'daughter' in stmt.text))(stmts),
+        _make_fraction_lies_stat_getter(
+            'mentioning a parent',
+            lambda stmt: ('parent' in stmt.text or 'mom' in stmt.text
+                          or 'mother' in stmt.text or 'dad' in stmt.text
+                          or 'father' in stmt.text))(stmts),
+    ),
     _make_fraction_lies_stat_getter(
-        'mentioning a child',
-        lambda stmt: ('child' in stmt.text or 'son' in stmt.text
-                      or 'daughter' in stmt.text)),
-    _make_fraction_lies_stat_getter(
-        'mentioning a parent',
-        lambda stmt: ('parent' in stmt.text or 'mom' in stmt.text
-                      or 'mother' in stmt.text or 'dad' in stmt.text
-                      or 'father' in stmt.text)),
-    _get_common_words_stat,
+        'mentioning school/college',
+        lambda stmt: ('college' in stmt.text or 'school' in stmt.text
+                      or 'university' in stmt.text)),
+    _get_common_words_stats,
 ]
 
 
 @_in_channel
 def handle_stats(args, channel, user_id):
-    heading = 'Two Truths and a Lie Stats'
-    stmts = (Statement.query.filter(Statement.veracity.isnot(None))
-             .order_by(Statement.timestamp).all())
+    year, heading = _coerce_year(args, "Some Two Truths and a Lie %s Stats")
+    stmts = Statement.query.filter(Statement.veracity.isnot(None))
+    stmts = _maybe_filter_stmts_for_year(stmts, year)
+    stmts = stmts.order_by(Statement.timestamp).all()
+
     stats = []
-    for getter in _STAT_GETTERS:
+    getters = _STAT_GETTERS[:]
+    random.shuffle(getters)
+    for getter in getters[:3]:
         stat = getter(stmts)
         if isinstance(stat, (list, tuple)):
             stats.extend(stat)
@@ -443,11 +567,14 @@ def handle_stats(args, channel, user_id):
 
 
 def handle_mystats(args, channel, user_id):
+    year, heading = _coerce_year(args, "Your %s Stats")
     votes = (db.session.query(Statement.timestamp, Statement.veracity)
              .select_from(Vote).join(Statement)
              .filter(Vote.slack_user_id == user_id)
-             .filter(Statement.veracity.isnot(None))
-             .all())
+             .filter(Statement.veracity.isnot(None)))
+    votes = _maybe_filter_stmts_for_year(votes, year)
+    votes = votes.all()
+
     if not votes:
         return 'No votes recorded for you yet!'
 
@@ -455,7 +582,16 @@ def handle_mystats(args, channel, user_id):
     correct = len([1 for ts, veracity in votes if not veracity])
     total = len(votes)
     percent = 100 * float(correct) / float(total)
-    return f'Your all time stats: {correct}/{total} ({percent:.0f}%).'
+
+    pnum = stats.pvalue(correct, total)
+    ptext = 'indistinguishable from random'
+    if pnum > 0.95:
+        ptext = f'better than random (p={pnum:.3f})'
+    elif pnum < 0.05:
+        ptext = f'worse than random (p={1-pnum:.3f})'
+
+    return (f'{heading}: {correct}/{total} ({percent:.0f}%).'
+            f'\nYou are statistically {ptext}.')
 
 
 def handle_help(args, channel, user_id):
@@ -655,6 +791,8 @@ def handle_interactive():
         else:
             logging.error("Unknown interactive type %s", type)
             return f"unknown interactive type {type}", 200
+    except InvalidInput as e:
+        return str(e)
     except Exception as e:
         logging.exception(e)
         # Not sure if we can get slack to show this...
@@ -673,4 +811,5 @@ def server_error(e):
 
 
 if __name__ == '__main__':
+    logging.root.setLevel(logging.DEBUG)
     app.run(host='127.0.0.1', port=9000, debug=True)
