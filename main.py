@@ -58,7 +58,8 @@ class Statement(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column('uid', db.ForeignKey(User.id), nullable=False)
     user = db.relationship("User")
-    # TODO: delete old versions
+
+    # deprecated
     slack_user_id = db.Column('user_id', db.String(32), nullable=True)
 
     text = db.Column(db.Text, nullable=False)
@@ -78,7 +79,8 @@ class Poll(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column('uid', db.ForeignKey(User.id), nullable=False)
     user = db.relationship("User")
-    # TODO: delete old versions
+
+    # deprecated
     slack_user_id = db.Column('user_id', db.String(32), nullable=True)
 
     ts = db.Column(db.String(32), nullable=False)
@@ -140,117 +142,9 @@ def handle_new(args, channel, user_id):
     }]}
 
 
-# TODO: delete old versions
-def handle_add(args, channel, user_id):
-    usage = "usage: add @person <statement>"
-    if ' ' not in args:
-        return usage
-    mention, statement = args.split(' ', 1)
-    m = MENTION_RE.match(mention)
-    if not m:
-        return usage
-    statement = Statement(slack_user_id=m.group(1), text=statement,
-                          timestamp=datetime.datetime.utcnow())
-    db.session.add(statement)
-    db.session.commit()
-    return ':+1:'
-
-
-# TODO: delete old versions
 def _get_user_real_name(user_id):
     resp = call_slack_api('users.info', {'user': user_id})
     return resp['user']['profile']['real_name'] or '@%s' % resp['user']['name']
-
-
-# TODO: delete old versions
-def handle_open(args, channel, user_id):
-    usage = "usage: open @person"
-    m = MENTION_RE.match(args)
-    if not m:
-        return usage
-    user_id, username = m.groups()
-    if db.session.query(
-            Poll.query.filter_by(slack_user_id=user_id).exists()).scalar():
-        return "There's already a vote on %s!" % username
-
-    statements = (Statement.query.filter_by(slack_user_id=user_id)
-                  .order_by(Statement.timestamp).all())
-    if len(statements) != 3:
-        return "%s has %s statements, not 3." % (username, len(statements))
-
-    message = ("Time to vote on %s's three statements!  "
-               "React with the number of the lie.\n%s" %
-               (_get_user_real_name(statements[0].slack_user_id),
-                '\n'.join(':%s: %s' % (emoji, statement.text)
-                          for emoji, statement in zip(EMOJIS, statements))))
-    resp = send_message(channel, message)
-
-    for emoji in EMOJIS:
-        # Add initial reactions.
-        call_slack_api('reactions.add',
-                       {'name': emoji, 'channel': channel,
-                        'timestamp': resp['ts']})
-
-    db.session.add(Poll(slack_user_id=user_id, ts=resp['ts'],
-                        timestamp=datetime.datetime.now()))
-    db.session.commit()
-    return ':+1:'
-
-
-# TODO: delete old versions
-def handle_oldclose(args, channel, user_id):
-    usage = "usage: close @person :<lie>:"
-    if ' ' not in args:
-        return usage
-    mention, lie = args.split(' ', 1)
-
-    m = MENTION_RE.match(mention)
-    if not m:
-        return usage
-    user_id, username = m.groups()
-
-    lie = lie.strip().strip(':')
-    if lie not in EMOJIS:
-        return usage
-
-    poll = Poll.query.filter_by(slack_user_id=user_id).one_or_none()
-    if not poll:
-        return "There's not a vote on %s!" % username
-    if poll.closed:
-        return "The vote on %s is already closed!" % username
-
-    poll.closed = True
-    db.session.add(poll)
-
-    statements = (Statement.query.filter_by(slack_user_id=user_id)
-                  .order_by(Statement.timestamp).all())
-
-    for emoji, statement in zip(EMOJIS, statements):
-        if emoji == lie:
-            statement.veracity = False
-        else:
-            statement.veracity = True
-
-    for emoji in EMOJIS:
-        call_slack_api('reactions.remove',
-                       {'name': emoji, 'channel': channel,
-                        'timestamp': poll.ts})
-    resp = call_slack_api('reactions.get',
-                          {'timestamp': poll.ts, 'channel': channel,
-                           'full': True})
-
-    for reaction in resp['message']['reactions']:
-        if reaction['name'] in EMOJIS:
-            statement_id = statements[EMOJIS.index(reaction['name'])].id
-            db.session.add_all([
-                Vote(slack_user_id=u, statement_id=statement_id)
-                for u in reaction['users']])
-
-    resp = send_message(
-        channel, "The lie was :%s:!  Thanks for playing." % lie)
-
-    db.session.commit()
-    return ':+1:'
 
 
 def handle_close(args, channel, user_id):
@@ -630,11 +524,9 @@ def handle_whoami(args, channel, user_id):
 
 HANDLERS = {
     'new': handle_new,
-    'add': handle_add,
-    'open': handle_open,
-    'oldclose': handle_oldclose,
     'close': handle_close,
     'leaderboard': handle_leaderboard,
+    'winners': handle_winners,
     'stats': handle_stats,
     'mystats': handle_mystats,
     'help': handle_help,  # also the default
