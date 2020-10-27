@@ -12,6 +12,7 @@ import flask_sqlalchemy
 import requests
 
 import app_secrets
+import stats
 
 logging.root.setLevel(logging.DEBUG)
 
@@ -325,15 +326,17 @@ def handle_leaderboard(args, channel, user_id):
         users[user_id]['total'] += votes
 
     for user, data in list(users.items()):   # list() so we can delete items
-        # TODO(benkraft): reddit comment score instead of threshold
         if data['total'] < 5:
             del users[user]
 
     for data in users.values():
-        data['%'] = 100 * float(data.get('correct', 0)) / float(data['total'])
+        correct = data.get('correct', 0)
+        total = data.get('total', 0)
+        data['k'], _ = stats.ci_bounds(correct, total)
+        data['%'] = 100 * float(correct) / float(total)
 
     leaderboard = sorted(users.items(),
-                         reverse=True, key=lambda item: item[1]['%'])
+                         reverse=True, key=lambda item: item[1]['k'])
 
     return "%s:\n%s" % (heading, '\n'.join(
         '%s. %s with %.0f%% (%s/%s)' % (
