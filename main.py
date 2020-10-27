@@ -261,7 +261,7 @@ def _coerce_year(args, heading):
 
 @_in_channel
 def handle_leaderboard(args, channel, user_id):
-    year, heading = _coerce_year(args, "Two Truths and a Lie Leaderboard %s")
+    year, heading = _coerce_year(args, "%s Leaderboard")
 
     rankings = _rankings(year)
     rankings = sorted(rankings, reverse=True,
@@ -316,7 +316,7 @@ def _first_by(l, f):
 
 @_in_channel
 def handle_winners(args, channel, user_id):
-    year, heading = _coerce_year(args, "Two Truths and a Lie Winners %s")
+    year, heading = _coerce_year(args, "%s Winners")
 
     rankings = _rankings(year)
     tellers = _tellers(year)
@@ -443,7 +443,7 @@ _STAT_GETTERS = [
 
 @_in_channel
 def handle_stats(args, channel, user_id):
-    year, heading = _coerce_year(args, "Some Two Truths and a Lie %s Stats")
+    year, heading = _coerce_year(args, "%s Stats")
     stmts = Statement.query.filter(Statement.veracity.isnot(None))
     stmts = _maybe_filter_stmts_for_year(stmts, year)
     stmts = stmts.order_by(Statement.timestamp).all()
