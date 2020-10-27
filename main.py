@@ -491,21 +491,25 @@ def handle_mystats(args, channel, user_id):
 def handle_help(args, channel, user_id):
     return ('To post the leaderboard in this channel, '
             '`/twotruths leaderboard [year]`.\n'
-            'To post global stats in this channel, `/twotruths stats`.\n'
-            'To see your stats, `/twotruths mystats`.\n'
+            'To post the "winners" (by various measures) in this channel, '
+            '`/twotruths winners [year]`.\n'
+            'To post global stats in this channel, '
+            '`/twotruths stats [year]`.\n'
+            'To see your personal stats, `/twotruths mystats [year]`.\n'
             'To see this help, `/twotruths help`.')
 
 
 def handle_adminhelp(args, channel, user_id):
     return ('To enter statements, `/twotruths new`.\n'
-            'To close voting, `/twotruths close`.\n'
+            'To close voting, `/twotruths close :number-that-was-a-lie:`.\n'
             'To see this admin help, `/twotruths adminhelp`.\n'
             'To see help for user commands, `/twotruths help`.')
 
 
 def handle_debughelp(args, channel, user_id):
     return ('Commands include: '
-            '__createtables, __version, __whoami')
+            '__createtables, __version, __whoami.\n'
+            'Suffix any command with "__as @-mention" to impersonate a user.')
 
 
 def handle_createtables(args, channel, user_id):
