@@ -493,8 +493,8 @@ def handle_help(args, channel, user_id):
             '`/twotruths leaderboard [year]`.\n'
             'To post the "winners" (by various measures) in this channel, '
             '`/twotruths winners [year]`.\n'
-            'To post global stats in this channel, '
-            '`/twotruths stats [year]`.\n'
+            # 'To post global stats in this channel, '
+            # '`/twotruths stats [year]`.\n'
             'To see your personal stats, `/twotruths mystats [year]`.\n'
             'To see this help, `/twotruths help`.')
 
@@ -531,7 +531,7 @@ HANDLERS = {
     'close': handle_close,
     'leaderboard': handle_leaderboard,
     'winners': handle_winners,
-    'stats': handle_stats,
+    # 'stats': handle_stats,
     'mystats': handle_mystats,
     'help': handle_help,  # also the default
     'adminhelp': handle_adminhelp,
