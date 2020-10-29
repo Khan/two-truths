@@ -777,6 +777,11 @@ def handle_ping():
     return 'OK', 200
 
 
+@app.route('/_ah/warmup', methods=['GET'])
+def handle_warmup():
+    return 'OK', 200
+
+
 @app.errorhandler(500)
 def server_error(e):
     logging.exception(e)

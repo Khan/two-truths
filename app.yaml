@@ -2,3 +2,9 @@ runtime: python37
 
 env_variables:
     DEBUG: false
+
+automatic_scaling:
+  min_instances: 1
+
+inbound_services:
+- warmup
