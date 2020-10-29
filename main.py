@@ -11,9 +11,11 @@ import os
 import flask
 import flask_sqlalchemy
 import requests
+import pytz
 
 import app_secrets
 import stats
+import util
 
 DB_INSTANCE = 'two-truths:us-central1:two-truths'
 DB_USER = 'two_truths'
@@ -359,6 +361,7 @@ def _make_common_lies_stat_getter(key_fn, desc_dict):
 
         sorted_positions = sorted(
             by_position.items(), key=lambda item: item[1])
+        print(desc_dict[0], sorted_positions)
 
         index, freq = sorted_positions[-1]
         pct = 100 * float(freq) / float(total)
@@ -409,7 +412,6 @@ def _get_common_words_stats(stmts):
 
 
 _STAT_GETTERS = [
-    _get_count,
     _make_common_lies_stat_getter(None, ORDINALS),
     _make_common_lies_stat_getter(
         lambda stmt: len(stmt.text),
@@ -451,7 +453,7 @@ def handle_stats(args, channel, user_id):
     stats = []
     getters = _STAT_GETTERS[:]
     random.shuffle(getters)
-    for getter in getters[:3]:
+    for getter in [_get_count] + getters[:]:
         stat = getter(stmts)
         if isinstance(stat, (list, tuple)):
             stats.extend(stat)
@@ -460,32 +462,107 @@ def handle_stats(args, channel, user_id):
     return '{}:{}'.format(heading, ''.join(f'\n- {s}' for s in stats))
 
 
+VERACITY_TO_VOTE_TYPE = {
+    False: 'correct',
+    True: 'incorrect',
+}
+
+
+@util.memo
+def _global_average(year):
+    votes = (db.session.query(Statement.veracity, db.func.count(Vote.id))
+             .select_from(Vote).join(Statement)
+             .filter(Statement.veracity.isnot(None)))
+    votes = _maybe_filter_stmts_for_year(votes, year)
+    votes = votes.group_by(Statement.veracity).all()
+
+    correct = next((v[1] for v in votes if not v[0]), 0)
+    incorrect = next((v[1] for v in votes if v[0]), 0)
+
+    return correct / (correct + incorrect)
+
+
 def handle_mystats(args, channel, user_id):
     year, heading = _coerce_year(args, "Your %s Stats")
-    votes = (db.session.query(Statement.timestamp, Statement.veracity)
-             .select_from(Vote).join(Statement)
+    votes = (db.session.query(Statement.timestamp, Statement.veracity,
+                              User.name)
+             .select_from(Vote).join(Statement).join(User)
              .filter(Vote.slack_user_id == user_id)
              .filter(Statement.veracity.isnot(None)))
     votes = _maybe_filter_stmts_for_year(votes, year)
-    votes = votes.all()
+    votes = votes.order_by(Statement.timestamp).all()
 
     if not votes:
-        return 'No votes recorded for you yet!'
+        return 'No votes recorded for you %s!' % (
+            'in %s' % year if year else 'yet')
 
-    # TODO: stats by year, etc.
-    correct = len([1 for ts, veracity in votes if not veracity])
+    correct = len([1 for ts, veracity, user in votes if not veracity])
     total = len(votes)
     percent = 100 * float(correct) / float(total)
 
-    pnum = stats.pvalue(correct, total)
-    ptext = 'indistinguishable from random'
-    if pnum > 0.95:
-        ptext = f'better than random (p={pnum:.3f})'
-    elif pnum < 0.05:
-        ptext = f'worse than random (p={1-pnum:.3f})'
+    def pvalue_text(pnum, comparison):
+        if pnum > 0.95:
+            return f'better than {comparison} (p={pnum:.3f})'
+        elif pnum < 0.05:
+            return f'worse than {comparison} (p={1-pnum:.3f})'
+        else:
+            return f'indistinguishable from {comparison}'
 
-    return (f'{heading}: {correct}/{total} ({percent:.0f}%).'
-            f'\nYou are statistically {ptext}.')
+    p_random = stats.pvalue(correct, total, 1/3.)
+    # TODO(benkraft): Technically this should be something something two-sided,
+    # but the global number of votes should be high enough it's not a big deal.
+    p_average = stats.pvalue(correct, total, _global_average(year))
+
+    streaks = []  # (veracity, length, start time, end time, broken by)
+    for timestamp, veracity, user in votes:
+        if not streaks:
+            streaks.append([veracity, 1, timestamp, timestamp, None])
+        elif streaks[-1][0] != veracity:
+            streaks[-1][4] = user
+            streaks.append([veracity, 1, timestamp, timestamp, None])
+        else:
+            streaks[-1][1] += 1
+            streaks[-1][3] = timestamp
+    streaks[-1][3] = None
+
+    longest_correct_streak = max(
+        [s for s in streaks if not s[0]], key=lambda s: s[1])
+    longest_incorrect_streak = max(
+        [s for s in streaks if s[0]], key=lambda s: s[1])
+    current_streak = streaks[-1]
+
+    def date_range_text(streak, fmt='%x'):
+        start = streak[2].astimezone(pytz.timezone('US/Pacific'))
+        if not streak[3]:
+            return f'started {start.strftime(fmt)}'
+
+        end = streak[3].astimezone(pytz.timezone('US/Pacific'))
+        if start.date() == end.date():
+            return f'on {start.strftime(fmt)}'
+        return f'from {start.strftime(fmt)} to {end.strftime(fmt)}'
+
+    def historical_streak_text(streak):
+        if streak[4]:
+            user_info = f'broken by {streak[4]}'
+        else:
+            user_info = 'ongoing'
+        return (f'Longest {VERACITY_TO_VOTE_TYPE[streak[0]]} streak: '
+                f'{streak[1]} votes, {date_range_text(streak)}, {user_info}')
+
+    def current_streak_text(streak):
+        return (f'Current streak: '
+                f'{streak[1]} {VERACITY_TO_VOTE_TYPE[streak[0]]} votes, '
+                f'{date_range_text(streak)}')
+
+    return (
+        f'{heading}:\n'
+        f'Record: {correct}/{total} ({percent:.0f}%)\n'
+        f'Statistically: {pvalue_text(p_random, "random")}, '
+        f'{pvalue_text(p_average, "the average user")}\n'
+        f'{historical_streak_text(longest_correct_streak)}\n'
+        f'{historical_streak_text(longest_incorrect_streak)}\n'
+        f'{current_streak_text(current_streak)}\n'
+    )
 
 
 def handle_help(args, channel, user_id):

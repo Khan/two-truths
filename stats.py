@@ -16,5 +16,6 @@ def ci_bounds(correct, n, ci=0.90):
     return (center - err) / denom, (center + err) / denom
 
 
-def pvalue(correct, n):
-    return norm.cdf(correct, loc=n/3., scale=math.sqrt(n * 2/9.))
+def pvalue(correct, n, frac):
+    return norm.cdf(correct, loc=n * frac,
+                    scale=math.sqrt(n * frac * (1 - frac)))
