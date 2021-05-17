@@ -13,7 +13,11 @@ To connect directly to the prod DB (e.g. to fix things up), .env/bin/activate, t
 
 ## TODO
 
+stats:
 - am I statistically significantly better than random
 - better leaderboard sorting based on some sort of confidence interval
 - other leaderboard rankings
 - look up a particular person's statements
+
+admin:
+- manage & edit past statements (useful both for fixing typos and if we accidentally get dupes or something)
