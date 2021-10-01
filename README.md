@@ -3,9 +3,11 @@ Two Truths and a Lie Bot
 
 To use, `/twotruths help` in any slack channel.  To deploy, `make deploy`.  You'll need `app_secrets.py`, which should look like:
 ```py
-TOKEN = '<keeper ID YN6eUmbB8H7qnO8o_Wfc-A>'
+BOT_TOKEN = '<keeper ID YN6eUmbB8H7qnO8o_Wfc-A>'
+VERIFICATION_TOKEN = '<keeper ID yQWnNvs5WEdVEUyQRB5Tgg>'
 DB_PASSWORD = '<keeper ID BUA1A04VVqnMLyILDRPNJw>'  # username: two_truths
 ```
+(The secrets are all in the "Two Truths bot" folder.)
 
 To test that it's working, `/twotruths __version` or `/twotruths leaderboard` (perhaps in #bot-testing).
 

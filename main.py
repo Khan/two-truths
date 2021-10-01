@@ -644,7 +644,8 @@ def handle_slash_command():
     except Exception as e:
         logging.exception(e)
         # We have to give 200 (a lie), or Slack won't even show the message.
-        return f"Something went very wrong: {e}! Ping @benkraft for help.", 200
+        return (f"Something went very wrong: {e}! Ping Dave Barnett or "
+                f"Diana Rosile for help."), 200
 
 
 def handle_new_modal(payload):
@@ -769,7 +770,8 @@ def handle_interactive():
     except Exception as e:
         logging.exception(e)
         # Not sure if we can get slack to show this...
-        return f"Something went very wrong: {e}! Ping @benkraft for help.", 200
+        return (f"Something went very wrong: {e}! Ping Dave Barnett or "
+                f"Diana Rosile for help."), 200
 
 
 @app.route('/ping', methods=['GET'])
